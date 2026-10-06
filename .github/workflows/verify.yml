@@ -1,0 +1,53 @@
+name: Verify ExposureGrid feasibility
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    shell: bash
+jobs:
+  official-native-gate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Independent local core and handwritten-oracle checks
+        run: |
+          mkdir -p artifacts/native
+          npm test | tee artifacts/native/core-tests.log
+          python3 -m unittest discover -s tests -p '*_test.py' -v 2>&1 | tee artifacts/native/oracle-tests.log
+          npm run prepare:gate
+      - name: Fetch official pinned native consumer
+        run: python3 scripts/fetch-krita.py
+      - name: Check headless runtime dependencies
+        run: |
+          command -v xvfb-run
+          command -v xauth
+      - name: Official CLI imports, native metadata, full rendered pixels, negative control
+        env:
+          QT_OPENGL: software
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/exposuregrid-config"
+          export XDG_DATA_HOME="$RUNNER_TEMP/exposuregrid-data"
+          export XDG_CACHE_HOME="$RUNNER_TEMP/exposuregrid-cache"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/exposuregrid-runtime"
+          mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          export KRITA_BIN="$RUNNER_TEMP/exposuregrid-krita/squashfs-root/AppRun"
+          xvfb-run -a -s '-screen 0 1280x800x24' python3 scripts/native-gate.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: exposuregrid-official-native-gate
+          path: artifacts/native/
+          retention-days: 14
