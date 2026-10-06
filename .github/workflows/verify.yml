@@ -67,9 +67,11 @@ jobs:
       - name: Test-only Japanese system fonts
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y fonts-noto-cjk
+          sudo apt-get install -y fonts-noto-cjk poppler-utils
           fc-cache -f
           fc-match -f '%{family}\n' 'sans:lang=ja'
+      - name: Independent raw-deflate browser fixtures
+        run: python3 scripts/create-browser-fixtures.py
       - name: Sandboxed Chrome, offline file, and actual downloads
         env:
           CHROMIUM_PATH: /usr/bin/google-chrome
@@ -81,6 +83,10 @@ jobs:
           trap 'kill "$SERVER_PID"' EXIT
           for i in $(seq 1 40); do curl -fsS http://127.0.0.1:4173/ >/dev/null && break; sleep 0.25; done
           node tests/browser/run.mjs
+      - name: Verify and render actual print PDFs
+        run: |
+          python3 scripts/verify-print.py
+          for pdf in artifacts/browser/*.pdf; do pdftoppm -png -r 110 "$pdf" "${pdf%.pdf}"; done
       - name: Independent extraction of actual downloaded ZIPs
         run: |
           EXPORT_DIR="$(python3 scripts/extract-browser-packages.py)"
