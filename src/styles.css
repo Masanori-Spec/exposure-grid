@@ -2,3 +2,21 @@
 /* Keep dense timing data legible; narrow screens scroll the table within its panel. */
 .small{font-size:11px}.scope-note p{font-size:12px}.file-zone>span:not(.upload-mark){font-size:11px}.source-info{font-size:12px}.source-info strong{font-size:13px}.metric-label{font-size:11px}.metric small{font-size:10px}table{font-size:12px}th{font-size:11px}td:last-child{font-size:11px}.pagination{font-size:11px}.pagination .secondary{font-size:11px}.timeline-row>span{font-size:10px}.layer-title strong{font-size:12px}.layer-title small{font-size:10px}.hero-pills span{font-size:11px}footer p,footer a{font-size:11px}.empty-state ol{font-size:11px}.count{font-size:11px}@media(max-width:720px){.scope-note p{font-size:11px}.hero-pills span{font-size:10px}.metric-label{font-size:10px}.metric small{font-size:9px}.pagination .secondary{min-height:40px}.boundary-heading p{font-size:10px}.timeline-row>span:last-child{overflow-wrap:anywhere}}
 @media(max-width:720px){.hero h1{font-size:clamp(26px,8.2vw,37px)}.local-badge{display:none}}
+/* Narrow controls retain unbroken language labels and room for three-digit FPS. */
+.language{flex-shrink:0}.language button{white-space:nowrap}
+@media(max-width:720px){.topbar{gap:12px}.language{gap:2px}.language button{padding:0 8px}}
+@media(max-width:380px){.control-section:nth-child(2){display:block}.control-section:nth-child(2) .fps-control{margin-bottom:18px}.control-section:nth-child(2)>select{font-size:12px}}
+.print-only{display:none}
+@page{size:A4 portrait;margin:14mm}
+@media print{
+ body{background:#fff;color:#202820;print-color-adjust:exact;-webkit-print-color-adjust:exact}
+ main{max-width:none;padding:0}.topbar,.hero,.scope-note,.controls,.section-heading,.status,.pagination,.details,footer,.skip,.empty-state{display:none!important}
+ .print-only{display:block}#print-header{margin-bottom:16px;border-bottom:1px solid #b8c4b1;padding-bottom:12px}
+ #print-header h1{font-size:22px;line-height:1.2;white-space:normal;margin:0 0 6px}
+ #print-header p{font-size:10px;line-height:1.6;overflow-wrap:anywhere}#print-project{font-weight:650;margin-bottom:4px}
+ .work-layout{display:block;border:0;box-shadow:none;overflow:visible}.review-panel{padding:0}.review-heading{margin-bottom:12px}
+ .review-heading h3{font-size:16px}.metrics{margin-bottom:14px;break-inside:avoid}.metric{padding:10px}.metric strong{font-size:18px}.metric-label,.metric small{font-size:9px}
+ .warning{margin:0 0 12px;padding:9px 11px;font-size:10px}.subheading{margin:13px 0 8px}.layer-list{gap:8px}.layer-card{padding:9px 11px;break-inside:avoid}.layer-title{margin-bottom:7px}
+ .boundary-heading{margin-top:15px}.table-scroll{overflow:visible}table{min-width:0;font-size:10px}th,td,td:last-child{font-size:9px;padding:7px 10px}thead{display:table-header-group}tr{break-inside:avoid}
+ .small{font-size:9px}.count{font-size:9px}.timeline-row{margin:4px 0}.timeline{height:19px}.exposure{font-size:8px}
+}

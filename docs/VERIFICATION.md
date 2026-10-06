@@ -16,13 +16,24 @@ A second read of the raw artifact parsed the KRA XML independently and decoded a
 
 The exact half-up boundary mapping also matched a separate BigInt reference for 230,400 comparisons spanning every 1–120 source/target FPS pair and 16 selected boundary positions. This is strong bounded evidence, not exhaustive arbitrary-project compatibility.
 
-## Product candidate checks
+## First product browser/native baseline
 
-The current source adds safe ZIP IO, a Japanese/English responsive UI, verified receipt reimport, and a rounded 24→30 case. Local unit/oracle tests and build run before publication.
+- Product source commit: `b70f15ffc12a725bf26e53514313b263d511aade`
+- [Run 37411065878](https://github.com/Masanori-Spec/exposure-grid/actions/runs/37411065878): `browser-download-native` passed; `official-native-gate` failed one Node 22 raw-deflate rejection test before native execution
+- Sandboxed Chrome 154.0.8037.57 on Ubuntu 22.04 passed 19 browser scenarios, with no page errors or external requests from the offline app
+- Actual downloaded exact and rounded ZIPs were independently extracted by Python and passed into official Krita 5.3.4 without regeneration
+- All 134 rendered planes passed: 24 original +48 exact output +6 rounded source +8 rounded output +48 shifted control. This is 34,304 RGBA pixel checks
+- Rounded conversion was 24→30 FPS, six→eight frames, with independently checked +1/60-second duration error
 
-**Pending:** the first hosted run of the expanded product matrix, including actual browser-download bytes entering Krita, the rounded native case, and visual inspection of desktop/mobile screenshots. No browser or rounded-native PASS is claimed yet.
+The first browser harness imported stored ZIPs only, so it did not establish browser deflate rejection. Source review also found the Japanese language button and FPS field cramped at 320px. These limits prevent treating that run as a completed release.
 
-The rounded hand-authored fixture has six frames at 24 FPS and eight frames at 30 FPS. Its expected duration change is +1/60 second. The native gate checks this receipt independently and compares all six source and eight converted pixel planes.
+## Repair gates pending
+
+Current source adds portable bounded RFC1951 framing validation rather than relying on a native decoder's trailing-data policy. Node 22 remains supported; ordinary valid deflate is not disabled to hide malformed-stream acceptance. The next hosted run adds independently generated deflated ZIP input, CRC-consistent trailing/concatenated/truncated controls, and an actual deflated-import export feeding the native gate.
+
+Responsive checks now require unbroken language labels and visibly adequate room for target 120 FPS at 320px. Actual Japanese/English print PDFs and a dense later-boundary-page PDF are captured, text/page-count checked with Poppler, and rasterized for visual inspection. Printed output explicitly labels the current boundary page, not a complete receipt, and includes mode, output basename, and rounding acknowledgment state.
+
+**Pending:** successful hosted checks for the repaired source and visual review of the new 320px and print evidence. The previous verified native/browser results remain valid only for their recorded baseline and coverage.
 
 ## Limits of the claim
 

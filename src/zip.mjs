@@ -8,6 +8,10 @@
  * network, executable-content handling, or product-specific file filtering.
  * EOCD candidate scans cache directory spans and cap aggregate header checks;
  * intentionally complex alternate-directory layouts fail closed.
+ * Raw-deflate framing is checked independently of the native inflater, whose
+ * tolerance for incomplete or trailing streams varies by runtime. The framing
+ * walk counts output without materializing it, caps aggregate structural work,
+ * and periodically yields so adversarial input cannot monopolize the UI thread.
  */
 import { LIMITS, ProfileError, safeBasename } from './core.mjs';
 
@@ -18,6 +22,9 @@ export const ZIP_LIMITS = Object.freeze({
   archiveBytes: LIMITS.totalBytes + 8 * 1024 * 1024,
   compressedFileBytes: LIMITS.fileBytes + 65536,
   directoryChecks: LIMITS.files * 8,
+  // Aggregate block headers plus declared tree entries, allowing ordinary
+  // multi-block streams and one full dynamic tree for every allowed ZIP entry.
+  deflateStructures: LIMITS.files * 1024,
 });
 const fail = (code, message) => { throw new ProfileError(code, message); };
 const signatures = { local: 0x04034b50, central: 0x02014b50, end: 0x06054b50, descriptor: 0x08074b50 };
@@ -117,11 +124,133 @@ function validateSizes(record) {
 }
 function sameBytes(a, b) { return a.length === b.length && a.every((byte, i) => byte === b[i]); }
 
-async function inflateBounded(compressed, size, name) {
-  if (typeof DecompressionStream !== 'function')
+// RFC 1951 §§3.1–3.2: https://www.rfc-editor.org/rfc/rfc1951
+// Canonical trees use at most 288 symbols, not a 2^15 table per block. Empty
+// distance trees are legal for all-literal blocks. Otherwise an incomplete tree
+// is legal only for the single one-bit symbol case, never for code lengths.
+function deflateTree(lengths, kind) {
+  const counts = new Uint16Array(16), first = new Uint16Array(16), offsets = new Uint16Array(16);
+  let maximum = 0, total = 0;
+  for (const length of lengths) if (length) { counts[length]++; maximum = Math.max(maximum, length); total++; }
+  if (!total) {
+    if (kind === 'distance') return null;
+    fail('ZIP_DEFLATE', 'ZIP deflate Huffman tree is empty');
+  }
+  let remaining = 1, code = 0, offset = 0;
+  for (let length = 1; length <= 15; length++) {
+    remaining = remaining * 2 - counts[length];
+    if (remaining < 0) fail('ZIP_DEFLATE', 'ZIP deflate Huffman tree is oversubscribed');
+    code = (code + counts[length - 1]) * 2;
+    first[length] = code; offsets[length] = offset; offset += counts[length];
+  }
+  if (remaining && (kind === 'codes' || maximum !== 1))
+    fail('ZIP_DEFLATE', 'ZIP deflate Huffman tree is incomplete');
+  const symbols = new Uint16Array(total), next = new Uint16Array(offsets);
+  for (let symbol = 0; symbol < lengths.length; symbol++)
+    if (lengths[symbol]) symbols[next[lengths[symbol]]++] = symbol;
+  return { counts, first, offsets, symbols, maximum };
+}
+const fixedLiterals = deflateTree(Uint8Array.from({ length: 288 }, (_, i) => i < 144 ? 8 : i < 256 ? 9 : i < 280 ? 7 : 8), 'literal');
+const fixedDistances = deflateTree(new Uint8Array(32).fill(5), 'distance');
+const lengthBase = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
+const lengthExtra = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
+const distanceBase = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
+const distanceExtra = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13];
+const codeLengthOrder = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+async function validateDeflate(compressed, size, name, budget) {
+  let bit = 0, output = 0, final = 0;
+  const bitLength = compressed.length * 8;
+  const malformed = () => fail('ZIP_DEFLATE', `ZIP deflate stream is invalid or truncated: ${name}`);
+  const read = count => {
+    if (bit + count > bitLength) malformed();
+    const byte = bit >>> 3, shift = bit & 7;
+    bit += count;
+    return ((compressed[byte] | compressed[byte + 1] << 8 | compressed[byte + 2] << 16) >>> shift) & ((1 << count) - 1);
+  };
+  const symbol = tree => {
+    if (!tree) malformed();
+    let code = 0;
+    for (let length = 1; length <= tree.maximum; length++) {
+      code = code * 2 + read(1);
+      const index = code - tree.first[length];
+      if (index >= 0 && index < tree.counts[length]) return tree.symbols[tree.offsets[length] + index];
+    }
+    malformed();
+  };
+  const addOutput = count => {
+    output += count;
+    if (output > size) fail('ZIP_SIZE', `ZIP expands beyond its declared size: ${name}`);
+  };
+  const chargeStructure = count => {
+    budget.structures += count; budget.slice += count;
+    if (budget.structures > ZIP_LIMITS.deflateStructures)
+      fail('ZIP_COMPLEXITY', 'ZIP deflate has too many blocks or Huffman tree entries; repackage as an ordinary ZIP');
+  };
+  // Literal/length work is bounded by the already capped decoded size. Empty
+  // blocks and dynamic tree work use a separate archive-wide hard budget. Each
+  // slice has at most 16384 symbols/tree entries (each symbol needs <=15 bits).
+  const yieldThread = async () => { budget.slice = 0; await new Promise(resolve => setTimeout(resolve, 0)); };
+  while (!final) {
+    chargeStructure(1);
+    final = read(1);
+    const type = read(2);
+    if (type === 3) malformed();
+    if (type === 0) {
+      bit = Math.ceil(bit / 8) * 8;
+      const length = read(16), complement = read(16);
+      if ((length ^ complement) !== 0xffff || bit + length * 8 > bitLength) malformed();
+      bit += length * 8; addOutput(length);
+    } else {
+      let literals = fixedLiterals, distances = fixedDistances;
+      if (type === 2) {
+        const literalCount = read(5) + 257, distanceCount = read(5) + 1, codeCount = read(4) + 4;
+        if (literalCount > 286) malformed();
+        chargeStructure(literalCount + distanceCount + codeCount);
+        const codeLengths = new Uint8Array(19);
+        for (let i = 0; i < codeCount; i++) codeLengths[codeLengthOrder[i]] = read(3);
+        const codes = deflateTree(codeLengths, 'codes');
+        const lengths = new Uint8Array(literalCount + distanceCount);
+        for (let i = 0; i < lengths.length;) {
+          const value = symbol(codes);
+          if (value < 16) { lengths[i++] = value; continue; }
+          if (value === 16 && !i) malformed();
+          const count = value === 16 ? read(2) + 3 : value === 17 ? read(3) + 3 : read(7) + 11;
+          if (i + count > lengths.length) malformed();
+          lengths.fill(value === 16 ? lengths[i - 1] : 0, i, i + count); i += count;
+        }
+        if (!lengths[256]) malformed();
+        literals = deflateTree(lengths.subarray(0, literalCount), 'literal');
+        distances = deflateTree(lengths.subarray(literalCount), 'distance');
+      }
+      while (true) {
+        if (++budget.slice >= 16384) await yieldThread();
+        const value = symbol(literals);
+        if (value === 256) break;
+        if (value < 256) { addOutput(1); continue; }
+        if (value > 285) malformed();
+        const length = lengthBase[value - 257] + read(lengthExtra[value - 257]);
+        const distanceCode = symbol(distances);
+        if (distanceCode > 29) malformed();
+        const distance = distanceBase[distanceCode] + read(distanceExtra[distanceCode]);
+        if (distance > output) malformed();
+        addOutput(length);
+      }
+    }
+    if (budget.slice >= 16384) await yieldThread();
+  }
+  // Unused high bits of the final byte are padding, but every additional whole
+  // byte is trailing data, including another complete raw-deflate stream.
+  if (Math.ceil(bit / 8) !== compressed.length) malformed();
+  if (output !== size) fail('ZIP_SIZE', `ZIP decoded size does not match: ${name}`);
+}
+
+async function inflateBounded(compressed, size, name, budget) {
+  await validateDeflate(compressed, size, name, budget);
+  const Constructor = globalThis.DecompressionStream;
+  if (typeof Constructor !== 'function')
     fail('ZIP_SUPPORT', 'This browser cannot unpack deflated ZIPs; use a stored ZIP or a newer browser');
   let stream;
-  try { stream = new DecompressionStream('deflate-raw'); }
+  try { stream = new Constructor('deflate-raw'); }
   catch { fail('ZIP_SUPPORT', 'This browser cannot unpack deflated ZIPs; use a stored ZIP or a newer browser'); }
   const result = new Uint8Array(size);
   const reader = new Blob([compressed]).stream().pipeThrough(stream).getReader();
@@ -267,10 +396,10 @@ export async function readZip(input) {
     if (candidateError) throw candidateError;
     fail('ZIP_FORMAT', 'ZIP end record is missing or has trailing data');
   }
-  const entries = [];
+  const entries = [], deflateBudget = { structures: 0, slice: 0 };
   for (const record of records) {
     const compressed = bytes.subarray(record.dataStart, record.dataEnd);
-    const data = record.method === 0 ? new Uint8Array(compressed) : await inflateBounded(compressed, record.size, record.name);
+    const data = record.method === 0 ? new Uint8Array(compressed) : await inflateBounded(compressed, record.size, record.name, deflateBudget);
     if (crc32(data) !== record.crc) fail('ZIP_CRC', `ZIP checksum does not match: ${record.name}`);
     if (!record.directory) entries.push({ name: record.name, data });
   }

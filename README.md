@@ -2,7 +2,7 @@
 
 An offline browser tool for converting the exposure timing of Krita TVPaint CSV animations to another integer frame rate. Japanese and English, with no runtime services or dependencies.
 
-**Product candidate:** the original native feasibility gate passed in official Krita 5.3.4. The expanded browser-download and rounded-mode native matrix is pending its first hosted run. See [verification scope](docs/VERIFICATION.md).
+**Product candidate:** official Krita 5.3.4 verified the actual browser-downloaded exact and rounded outputs in the first product run. That run exposed a Node 22 raw-deflate rejection gap, and review found cramped 320px controls. Portable framing, responsive fixes, and print checks are undergoing a new hosted verification. See [verification scope](docs/VERIFICATION.md).
 
 ## Use
 
@@ -43,7 +43,7 @@ Folder overrides, missing or unreferenced assets, inconsistent metadata, entirel
 - 100,000 frames, 64 layers, 20,000 total exposures
 - 16 MiB CSV, 32 MiB individual file/receipt, 128 MiB total package, 136 MiB compressed ZIP ceiling
 - PNG decode limit: 64 MiB per image and 256 MiB across the package
-- ZIP entries: 4,096, including directory entries and the output receipt; adversarial alternate-directory metadata is bounded to 32,768 header checks
+- ZIP entries: 4,096, including directory entries and the output receipt; adversarial alternate-directory metadata is bounded to 32,768 header checks; raw-deflate framing has a 4,194,304-unit aggregate work limit and yields periodically
 - Timeline bars show at most the first 100 exposures per layer, with an explicitly labeled remainder. Every boundary remains accessible through pagination and in the complete receipt
 
 Files stay in memory in the current tab. There are no uploads, accounts, telemetry, or network dependencies. Only the selected language is saved locally. The built HTML's content policy blocks network connections.
@@ -64,6 +64,8 @@ python3 scripts/native-gate.py --verify-inputs-only
 ```
 
 `npm run dev` serves the app on localhost:4173. The hosted browser workflow uses sandboxed Chrome on Ubuntu 22.04; it does not disable the browser sandbox. It checks Japanese/English desktop/mobile layouts, keyboard access, actual downloads, malformed input, receipt mismatch, cancellation, pagination, and stale asynchronous operations.
+
+Browser print uses the current boundary page only, labeled with page/range/total, output name, mode, and acknowledgment state. The complete JSON receipt always remains the full record. Test PDFs are independently text-checked and rasterized for visual review.
 
 The actual browser-downloaded exact and rounded ZIPs are independently extracted by Python's standard-library ZIP reader. Those exact CSV/PNG/receipt bytes feed the official native consumer, without substituting regenerated outputs.
 

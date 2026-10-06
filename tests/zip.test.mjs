@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { deflateRawSync, constants } from 'node:zlib';
+import { deflateRawSync, inflateRawSync, createInflateRaw, constants } from 'node:zlib';
+import { Duplex } from 'node:stream';
 import { readFile } from 'node:fs/promises';
 import { readZip, writeZip, ZIP_LIMITS } from '../src/zip.mjs';
 import { LIMITS, loadProject, retimeProject, exportEntries, ProfileError } from '../src/core.mjs';
@@ -85,6 +86,60 @@ function fixture(entries = [{ name: 'a.csv', data: text('hello') }], options = {
 }
 async function rejectsZIP(bytes, code) {
   await assert.rejects(readZip(bytes), error => error instanceof ProfileError && (!code || error.code === code));
+}
+
+// Hand-authored RFC1951 fixtures, independent of zlib and the production parser.
+// Numbers are LSB-first; canonical Huffman codes are written MSB-first.
+function bitWriter() {
+  const bytes = []; let position = 0;
+  const bit = value => { const index = position >>> 3; bytes[index] = (bytes[index] ?? 0) | (value << (position++ & 7)); };
+  return {
+    number(value, count) { for (let i = 0; i < count; i++) bit((value >>> i) & 1); },
+    code(value, count) { for (let i = count - 1; i >= 0; i--) bit((value >>> i) & 1); },
+    finish() { return Uint8Array.from(bytes); },
+  };
+}
+function writeSymbol(writer, lengths, symbol) {
+  // Sort the alphabet and advance canonical codes, rather than using the
+  // production decoder's count/offset representation.
+  const ordered = Array.from(lengths, (length, value) => ({ length, value }))
+    .filter(item => item.length).sort((a, b) => a.length - b.length || a.value - b.value);
+  let code = 0, previous = 0;
+  for (const item of ordered) {
+    code *= 2 ** (item.length - previous);
+    if (item.value === symbol) { writer.code(code, item.length); return; }
+    code++; previous = item.length;
+  }
+  throw new Error('Fixture symbol absent from tree');
+}
+const fixtureFixedLengths = Uint8Array.from({ length: 288 }, (_, value) => value <= 143 ? 8 : value <= 255 ? 9 : value <= 279 ? 7 : 8);
+function fixedStream(write, final = 1) {
+  const writer = bitWriter(); writer.number(final, 1); writer.number(1, 2);
+  write(writer, value => writeSymbol(writer, fixtureFixedLengths, value));
+  return writer.finish();
+}
+function dynamicBlock(writer, literals, distances, write = () => {}, final = 1) {
+  writer.number(final, 1); writer.number(2, 2);
+  writer.number(literals.length - 257, 5); writer.number(distances.length - 1, 5); writer.number(15, 4);
+  // Complete four-bit tree for code-length symbols 0–15. Repeat symbols absent.
+  for (const value of [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15])
+    writer.number(value < 16 ? 4 : 0, 3);
+  for (const length of [...literals, ...distances]) writer.code(length, 4);
+  write(value => writeSymbol(writer, literals, value), value => writeSymbol(writer, distances, value));
+}
+function dynamicStream(literals, distances, write) {
+  const writer = bitWriter(); dynamicBlock(writer, literals, distances, write); return writer.finish();
+}
+function repeatedTreeStream(sequence, distanceCount, write = () => {}) {
+  const writer = bitWriter(), codeLengths = new Uint8Array(19);
+  codeLengths[0] = 2; codeLengths[1] = 2; codeLengths[16] = 2; codeLengths[17] = 3; codeLengths[18] = 3;
+  writer.number(1, 1); writer.number(2, 2); writer.number(0, 5); writer.number(distanceCount - 1, 5); writer.number(14, 4);
+  for (const value of [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1]) writer.number(codeLengths[value], 3);
+  for (const [value, extra = 0] of sequence) {
+    writeSymbol(writer, codeLengths, value);
+    if (value >= 16) writer.number(extra, value === 16 ? 2 : value === 17 ? 3 : 7);
+  }
+  write(writer); return writer.finish();
 }
 
 test('stored writer round-trips exact binary bytes and deterministic standard headers', async () => {
@@ -231,6 +286,137 @@ test('malformed, truncated, and trailing deflate bytes are rejected', async () =
   for (const bytes of [Uint8Array.of(7, 255, 255), compressed.slice(0, -1), join(compressed, Uint8Array.of(0)), join(compressed, compressed)])
     await rejectsZIP(fixture([{ name: 'a.csv', data: text('abc'), method: 8, compressed: bytes }]), 'ZIP_DEFLATE');
 });
+test('hand-authored streams accept ignored padding, empty trees, singleton codes and deep Huffman codes', async () => {
+  const singleEnd = new Uint8Array(257); singleEnd[256] = 1;
+  const literalOnly = new Uint8Array(257); literalOnly[65] = 1; literalOnly[256] = 1;
+  const withMatch = new Uint8Array(258); withMatch[65] = 1; withMatch[256] = 2; withMatch[257] = 2;
+  const deepTree = new Uint8Array(257);
+  for (let i = 0; i < 15; i++) deepTree[i] = i + 1;
+  deepTree[256] = 15;
+  const fixedPadding = fixedStream((writer, symbol) => { symbol(65); symbol(256); });
+  fixedPadding[fixedPadding.length - 1] |= 0xfc; // Only the high six unused bits.
+  const streams = [
+    [Uint8Array.of(0xf9, 1, 0, 254, 255, 65), text('A')], // Stored alignment bits ignored.
+    [fixedPadding, text('A')],
+    [dynamicStream(singleEnd, Uint8Array.of(0), literal => literal(256)), empty],
+    [dynamicStream(literalOnly, Uint8Array.of(0), literal => { literal(65); literal(256); }), text('A')],
+    [dynamicStream(withMatch, Uint8Array.of(1), (literal, distance) => { literal(65); literal(257); distance(0); literal(256); }), text('AAAA')],
+    [dynamicStream(deepTree, Uint8Array.of(0), literal => { literal(14); literal(0); literal(13); literal(256); }), Uint8Array.of(14, 0, 13)],
+  ];
+  for (const [compressed, data] of streams) {
+    assert.deepEqual(new Uint8Array(inflateRawSync(compressed)), data, 'independent zlib oracle accepts fixture');
+    assert.deepEqual(await readZip(fixture([{ name: 'a.csv', data, compressed, method: 8 }])), [{ name: 'a.csv', data }]);
+    for (let i = 0; i < compressed.length; i++)
+      await rejectsZIP(fixture([{ name: 'a.csv', data, compressed: compressed.subarray(0, i), method: 8 }]), 'ZIP_DEFLATE');
+  }
+});
+test('dynamic code-length repeats may cross tree boundaries but must not start without a predecessor or overflow', async () => {
+  const valid = [
+    // 255 zero lengths, literal255=1, then repeat1 across EOB and both distances.
+    [repeatedTreeStream([[18, 127], [18, 106], [1], [16]], 2, writer => { writer.code(0, 1); writer.code(1, 1); }), Uint8Array.of(255)],
+    // Repeat17 also works: 138+110+8 zeros, a one-bit EOB and no distances.
+    [repeatedTreeStream([[18, 127], [18, 99], [17, 5], [1], [0]], 1, writer => writer.code(0, 1)), empty],
+  ];
+  for (const [compressed, data] of valid) {
+    assert.deepEqual(new Uint8Array(inflateRawSync(compressed)), data);
+    assert.deepEqual(await readZip(fixture([{ name: 'a.csv', data, compressed, method: 8 }])), [{ name: 'a.csv', data }]);
+  }
+  const invalid = [
+    [[16, 0]], // No preceding length to copy.
+    [[18, 127], [18, 127]], // 276 values, but only 258 declared.
+    [[18, 127], [18, 100], [17, 7]], // 259 values.
+    [[18, 127], [18, 106], [1], [16, 3]], // Six copies overrun the tail.
+  ];
+  const original = globalThis.DecompressionStream; let calls = 0;
+  try {
+    globalThis.DecompressionStream = class { constructor() { calls++; return new TransformStream({ transform() {} }); } };
+    for (const sequence of invalid)
+      await rejectsZIP(fixture([{ name: 'a.csv', data: empty, compressed: repeatedTreeStream(sequence, 1), method: 8 }]), 'ZIP_DEFLATE');
+    assert.equal(calls, 0);
+  } finally { globalThis.DecompressionStream = original; }
+});
+test('backreferences may overlap, cross blocks, and reach the full 32768-byte window', async () => {
+  const first = new Uint8Array(32768);
+  const header = Uint8Array.of(0, 0, 128, 255, 127); // Non-final stored block.
+  const last = fixedStream((writer, literal) => {
+    literal(285); writer.code(29, 5); writer.number(8191, 13); literal(256);
+  });
+  const compressed = join(header, first, last), data = new Uint8Array(32768 + 258);
+  assert.deepEqual(new Uint8Array(inflateRawSync(compressed)), data);
+  assert.deepEqual(await readZip(fixture([{ name: 'a.csv', data, compressed, method: 8 }])), [{ name: 'a.csv', data }]);
+});
+test('reserved symbols, absent final blocks, invalid distances and invalid dynamic trees fail before native inflation', async () => {
+  const missingEnd = new Uint8Array(257); missingEnd[65] = 1; missingEnd[66] = 1;
+  const oversubscribed = new Uint8Array(257); oversubscribed[65] = 1; oversubscribed[66] = 1; oversubscribed[256] = 1;
+  const incomplete = new Uint8Array(257); incomplete[65] = 2; incomplete[256] = 2;
+  const literalOnly = new Uint8Array(257); literalOnly[65] = 1; literalOnly[256] = 1;
+  const withMatch = new Uint8Array(258); withMatch[65] = 1; withMatch[256] = 2; withMatch[257] = 2;
+  const singleEnd = new Uint8Array(257); singleEnd[256] = 1;
+  const invalid = [
+    Uint8Array.of(0, 0, 0, 255, 255), // Non-final stored block with no following header.
+    fixedStream((writer, literal) => literal(256), 0),
+    ...[286, 287].map(value => fixedStream((writer, literal) => literal(value))),
+    fixedStream((writer, literal) => { literal(257); writer.code(0, 5); }),
+    fixedStream((writer, literal) => { literal(65); literal(257); writer.code(1, 5); }),
+    ...[30, 31].map(value => fixedStream((writer, literal) => { literal(65); literal(257); writer.code(value, 5); })),
+    dynamicStream(missingEnd, Uint8Array.of(0)),
+    dynamicStream(oversubscribed, Uint8Array.of(0)),
+    dynamicStream(incomplete, Uint8Array.of(0)),
+    dynamicStream(literalOnly, Uint8Array.of(2)),
+    dynamicStream(literalOnly, Uint8Array.of(1, 1, 1)),
+    dynamicStream(withMatch, Uint8Array.of(0), literal => { literal(65); literal(257); }),
+  ];
+  // A one-bit singleton leaves code 1 invalid, including the singleton EOB.
+  const badSingleton = bitWriter();
+  dynamicBlock(badSingleton, singleEnd, Uint8Array.of(0)); badSingleton.code(1, 1); invalid.push(badSingleton.finish());
+  for (const count of [287, 288]) {
+    const writer = bitWriter(); writer.number(1, 1); writer.number(2, 2); writer.number(count - 257, 5); writer.number(0, 5); writer.number(0, 4);
+    invalid.push(writer.finish());
+  }
+  for (const lengths of [[0, 0, 0, 0], [1, 1, 1, 1], [2, 0, 0, 0]]) {
+    const writer = bitWriter(); writer.number(1, 1); writer.number(2, 2); writer.number(0, 5); writer.number(0, 5); writer.number(0, 4);
+    for (const length of lengths) writer.number(length, 3);
+    invalid.push(writer.finish());
+  }
+  const original = globalThis.DecompressionStream; let calls = 0;
+  try {
+    globalThis.DecompressionStream = class {
+      constructor() { calls++; return new TransformStream({ transform() {} }); }
+    };
+    for (const compressed of invalid)
+      await rejectsZIP(fixture([{ name: 'a.csv', data: text('AAAA'), compressed, method: 8 }]), 'ZIP_DEFLATE');
+    assert.equal(calls, 0, 'a completely tolerant native decoder cannot mask malformed framing');
+  } finally { globalThis.DecompressionStream = original; }
+});
+test('large literal walks yield before native inflation begins', async () => {
+  const original = globalThis.DecompressionStream, data = new Uint8Array(65536).fill(65);
+  const compressed = fixedStream((writer, literal) => {
+    // Fixed code for ASCII A, avoiding repeated fixture-tree construction.
+    for (let i = 0; i < data.length; i++) writer.code(0x71, 8);
+    literal(256);
+  });
+  let timerRan = false, sawNative = false;
+  const timer = setTimeout(() => { timerRan = true; }, 0);
+  try {
+    globalThis.DecompressionStream = class {
+      constructor(format) { assert(timerRan, 'framing must let pending UI tasks run first'); sawNative = true; return new original(format); }
+    };
+    assert.deepEqual((await readZip(fixture([{ name: 'a.csv', data, compressed, method: 8 }])))[0].data, data);
+    assert(sawNative);
+  } finally { clearTimeout(timer); globalThis.DecompressionStream = original; }
+});
+test('deflate structural budget is shared across entries and resets between imports', async () => {
+  const literals = new Uint8Array(257); literals[256] = 1;
+  const perBlockCost = 1 + 257 + 1 + 19;
+  const count = Math.floor(ZIP_LIMITS.deflateStructures / perBlockCost / 2) + 1;
+  const writer = bitWriter();
+  for (let i = 0; i < count; i++) dynamicBlock(writer, literals, Uint8Array.of(0), literal => literal(256), i === count - 1 ? 1 : 0);
+  const compressed = writer.finish();
+  const one = fixture([{ name: 'a.csv', compressed, method: 8 }]);
+  assert.deepEqual(await readZip(one), [{ name: 'a.csv', data: empty }]);
+  assert.deepEqual(await readZip(one), [{ name: 'a.csv', data: empty }]);
+  await rejectsZIP(fixture([{ name: 'a.csv', compressed, method: 8 }, { name: 'b.csv', compressed, method: 8 }]), 'ZIP_COMPLEXITY');
+});
 test('all central/local critical fields must agree', async () => {
   for (const override of [{ localNameBytes: text('b.csv') }, { localNameBytes: text('aa.csv') }, { localCRC: 1 }, { localCompressedSize: 1 }, { localSize: 1 }, { localMethod: 8 }, { localFlags: 0x0800 }, { localVersion: 10 }])
     await rejectsZIP(fixture([{ name: 'a.csv', data: text('abc'), ...override }]), 'ZIP_FORMAT');
@@ -324,6 +510,77 @@ test('missing browser decompression produces a specific support error; stored ZI
     assert.equal((await readZip(fixture())).length, 1);
     globalThis.DecompressionStream = class { constructor() { throw new TypeError('unsupported'); } };
     await rejectsZIP(fixture([{ name: 'a.csv', method: 8 }]), 'ZIP_SUPPORT');
+  } finally { globalThis.DecompressionStream = original; }
+});
+test('tolerant native inflaters still accept valid deflate and never receive invalid framing', async () => {
+  const original = globalThis.DecompressionStream;
+  let calls = 0;
+  try {
+    globalThis.DecompressionStream = class {
+      constructor(format) {
+        assert.equal(format, 'deflate-raw'); calls++;
+        // Node's raw zlib stream ignores extra bytes, like older native browsers.
+        return Duplex.toWeb(createInflateRaw());
+      }
+    };
+    const data = text('abc'.repeat(10000));
+    for (const deflateOptions of [{ level: 0 }, { strategy: constants.Z_FIXED }, { level: 9 }])
+      assert.deepEqual(await readZip(fixture([{ name: 'a.csv', data, method: 8, deflateOptions }])), [{ name: 'a.csv', data }]);
+    const callsBefore = calls, compressed = new Uint8Array(deflateRawSync(data));
+    assert.deepEqual(new Uint8Array(inflateRawSync(join(compressed, compressed))), data, 'the regression fixture really is tolerated by zlib');
+    for (const bytes of [Uint8Array.of(7), compressed.slice(0, -1), join(compressed, Uint8Array.of(0)), join(compressed, compressed)])
+      await rejectsZIP(fixture([{ name: 'a.csv', data, method: 8, compressed: bytes }]), 'ZIP_DEFLATE');
+    assert.equal(calls, callsBefore, 'invalid framing must be rejected before constructing the native inflater');
+    assert.deepEqual(await readZip(writeZip([{ name: 'a.csv', data }])), [{ name: 'a.csv', data }]);
+  } finally { globalThis.DecompressionStream = original; }
+});
+test('native read errors, incorrect output sizes, and wrong decoded bytes remain guarded', async () => {
+  const original = globalThis.DecompressionStream, bytes = fixture([{ name: 'a.csv', data: text('A'), method: 8 }]);
+  try {
+    globalThis.DecompressionStream = class {
+      constructor() { return new TransformStream({ transform() { throw new TypeError('native decode failed'); } }); }
+    };
+    await rejectsZIP(bytes, 'ZIP_DEFLATE');
+    for (const output of [empty, text('AB'), text('B')]) {
+      globalThis.DecompressionStream = class {
+        constructor() { return new TransformStream({ transform() {}, flush(controller) { controller.enqueue(output); } }); }
+      };
+      await rejectsZIP(bytes, output.length === 1 ? 'ZIP_CRC' : 'ZIP_SIZE');
+    }
+  } finally { globalThis.DecompressionStream = original; }
+});
+test('simulated native acceptance of every byte sequence cannot bypass framing validation', async () => {
+  const original = globalThis.DecompressionStream, data = text('A');
+  let calls = 0;
+  try {
+    globalThis.DecompressionStream = class {
+      constructor() {
+        calls++;
+        return new TransformStream({ transform() {}, flush(controller) { controller.enqueue(data); } });
+      }
+    };
+    const valid = Uint8Array.of(1, 1, 0, 254, 255, 65);
+    for (const compressed of [...Array.from({ length: valid.length }, (_, i) => valid.slice(0, i)),
+      Uint8Array.of(7), Uint8Array.of(1, 1, 0, 0, 0, 65),
+      Uint8Array.of(0, 1, 0, 254, 255, 65), join(valid, Uint8Array.of(0)), join(valid, valid)])
+      await rejectsZIP(fixture([{ name: 'a.csv', data, method: 8, compressed }]), 'ZIP_DEFLATE');
+    assert.equal(calls, 0);
+    assert.deepEqual(await readZip(fixture([{ name: 'a.csv', data, method: 8, compressed: valid }])), [{ name: 'a.csv', data }]);
+    assert.equal(calls, 1);
+  } finally { globalThis.DecompressionStream = original; }
+});
+test('concurrent imports and native constructor changes do not share mutable framing state', async () => {
+  const original = globalThis.DecompressionStream;
+  let firstCalls = 0, secondCalls = 0;
+  try {
+    globalThis.DecompressionStream = class { constructor(format) { firstCalls++; return new original(format); } };
+    const bytes = fixture([{ name: 'a.csv', data: text('abc'), method: 8 }]);
+    const results = await Promise.all([readZip(bytes), readZip(bytes)]);
+    assert.equal(firstCalls, 2);
+    assert.equal(decode(results[0][0].data), 'abc');
+    globalThis.DecompressionStream = class { constructor(format) { secondCalls++; return new original(format); } };
+    assert.equal(decode((await readZip(bytes))[0].data), 'abc');
+    assert.equal(secondCalls, 1);
   } finally { globalThis.DecompressionStream = original; }
 });
 test('ZIP layer retains every product file including review JSON for strict wrapper validation', async () => {
