@@ -1,0 +1,283 @@
+{
+  "description": "Hand-authored expectations, independent of the converter. CSV layer order is top to bottom; libkis childNodes order is bottom to top.",
+  "width": 16,
+  "height": 16,
+  "source": {
+    "fps": 12,
+    "frames": 24,
+    "layers": [
+      {
+        "name": "Layer A",
+        "keys": [
+          0,
+          6,
+          12
+        ],
+        "spans": [
+          [
+            0,
+            6,
+            "A"
+          ],
+          [
+            6,
+            12,
+            "B"
+          ],
+          [
+            12,
+            24,
+            "C"
+          ]
+        ]
+      },
+      {
+        "name": "Layer B",
+        "keys": [
+          0,
+          3,
+          9,
+          15
+        ],
+        "spans": [
+          [
+            0,
+            3,
+            "blank"
+          ],
+          [
+            3,
+            9,
+            "X"
+          ],
+          [
+            9,
+            15,
+            "blank"
+          ],
+          [
+            15,
+            24,
+            "Y"
+          ]
+        ]
+      }
+    ]
+  },
+  "doubled": {
+    "fps": 24,
+    "frames": 48,
+    "layers": [
+      {
+        "name": "Layer A",
+        "keys": [
+          0,
+          12,
+          24
+        ],
+        "spans": [
+          [
+            0,
+            12,
+            "A"
+          ],
+          [
+            12,
+            24,
+            "B"
+          ],
+          [
+            24,
+            48,
+            "C"
+          ]
+        ]
+      },
+      {
+        "name": "Layer B",
+        "keys": [
+          0,
+          6,
+          18,
+          30
+        ],
+        "spans": [
+          [
+            0,
+            6,
+            "blank"
+          ],
+          [
+            6,
+            18,
+            "X"
+          ],
+          [
+            18,
+            30,
+            "blank"
+          ],
+          [
+            30,
+            48,
+            "Y"
+          ]
+        ]
+      }
+    ]
+  },
+  "pixels": {
+    "A": {
+      "rgba": [
+        255,
+        0,
+        0,
+        255
+      ],
+      "rect": [
+        0,
+        0,
+        10,
+        10
+      ]
+    },
+    "B": {
+      "rgba": [
+        0,
+        0,
+        255,
+        255
+      ],
+      "rect": [
+        0,
+        0,
+        10,
+        10
+      ]
+    },
+    "C": {
+      "rgba": [
+        255,
+        0,
+        255,
+        255
+      ],
+      "rect": [
+        0,
+        0,
+        10,
+        10
+      ]
+    },
+    "X": {
+      "rgba": [
+        0,
+        255,
+        0,
+        255
+      ],
+      "rect": [
+        0,
+        0,
+        16,
+        16
+      ]
+    },
+    "Y": {
+      "rgba": [
+        255,
+        255,
+        0,
+        255
+      ],
+      "rect": [
+        0,
+        0,
+        16,
+        16
+      ]
+    },
+    "blank": {
+      "rgba": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "rect": [
+        0,
+        0,
+        16,
+        16
+      ]
+    }
+  },
+  "negativeControl": {
+    "description": "Shift only Layer A's first A\u2192B boundary from target frame 12 to 13. Original oracle must reject native results.",
+    "expectedMismatchFrames": [
+      12
+    ]
+  },
+  "shifted": {
+    "fps": 24,
+    "frames": 48,
+    "layers": [
+      {
+        "name": "Layer A",
+        "keys": [
+          0,
+          13,
+          24
+        ],
+        "spans": [
+          [
+            0,
+            13,
+            "A"
+          ],
+          [
+            13,
+            24,
+            "B"
+          ],
+          [
+            24,
+            48,
+            "C"
+          ]
+        ]
+      },
+      {
+        "name": "Layer B",
+        "keys": [
+          0,
+          6,
+          18,
+          30
+        ],
+        "spans": [
+          [
+            0,
+            6,
+            "blank"
+          ],
+          [
+            6,
+            18,
+            "X"
+          ],
+          [
+            18,
+            30,
+            "blank"
+          ],
+          [
+            30,
+            48,
+            "Y"
+          ]
+        ]
+      }
+    ]
+  }
+}

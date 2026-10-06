@@ -1,0 +1,15 @@
+{
+  "version": "5.3.4",
+  "sourceTag": "v6.0.4",
+  "filename": "krita-5.3.4-x86_64.AppImage",
+  "downloadURL": "https://mirrors.xtom.com/kde/stable/krita/5.3.4/krita-5.3.4-x86_64.AppImage",
+  "allowedDownloadHosts": ["mirrors.xtom.com"],
+  "sha256": "217c2f3cf17c2c604deb8708253ee6d2bd884f508424c20e788c562ddc50f24d",
+  "sizeBytes": 381626872,
+  "officialChecksumURL": "https://download.kde.org/stable/krita/5.3.4/krita-5.3.4-x86_64.AppImage.sha256",
+  "officialMirrorMetadataURL": "https://download.kde.org/stable/krita/5.3.4/krita-5.3.4-x86_64.AppImage.mirrorlist",
+  "officialReleaseURL": "https://krita.org/en/posts/2026/krita-5.3.4-released/",
+  "licenseURL": "https://krita.org/en/about/license/",
+  "verifiedMetadataDate": "2026-10-06",
+  "note": "KDE-listed xTom commercial mirror selected to avoid university mirrors. Redirects are restricted before network follow. Downloaded binary is test-only and must not be included in release artifacts."
+}
