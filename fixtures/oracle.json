@@ -1,5 +1,5 @@
 {
-  "description": "Hand-authored expectations, independent of the converter. CSV layer order is top to bottom; libkis childNodes order is bottom to top.",
+  "description": "Hand-authored expectations independent of converter helpers. CSV and KRA XML layer order is top to bottom. All boundary targets and signed reduced rational errors are literal review expectations.",
   "width": 16,
   "height": 16,
   "source": {
@@ -279,5 +279,261 @@
         ]
       }
     ]
+  },
+  "roundedSource": {
+    "fps": 24,
+    "frames": 6,
+    "layers": [
+      {
+        "name": "Layer A",
+        "keys": [
+          0,
+          2,
+          5
+        ],
+        "spans": [
+          [
+            0,
+            2,
+            "A"
+          ],
+          [
+            2,
+            5,
+            "B"
+          ],
+          [
+            5,
+            6,
+            "C"
+          ]
+        ]
+      },
+      {
+        "name": "Layer B",
+        "keys": [
+          0,
+          1,
+          4
+        ],
+        "spans": [
+          [
+            0,
+            1,
+            "blank"
+          ],
+          [
+            1,
+            4,
+            "X"
+          ],
+          [
+            4,
+            6,
+            "Y"
+          ]
+        ]
+      }
+    ]
+  },
+  "rounded": {
+    "fps": 30,
+    "frames": 8,
+    "layers": [
+      {
+        "name": "Layer A",
+        "keys": [
+          0,
+          3,
+          6
+        ],
+        "spans": [
+          [
+            0,
+            3,
+            "A"
+          ],
+          [
+            3,
+            6,
+            "B"
+          ],
+          [
+            6,
+            8,
+            "C"
+          ]
+        ]
+      },
+      {
+        "name": "Layer B",
+        "keys": [
+          0,
+          1,
+          5
+        ],
+        "spans": [
+          [
+            0,
+            1,
+            "blank"
+          ],
+          [
+            1,
+            5,
+            "X"
+          ],
+          [
+            5,
+            8,
+            "Y"
+          ]
+        ]
+      }
+    ]
+  },
+  "reviews": {
+    "retimed24": {
+      "source": "source",
+      "target": "doubled",
+      "mode": "exact",
+      "sourceDurationSeconds": {
+        "numerator": 2,
+        "denominator": 1
+      },
+      "targetDurationSeconds": {
+        "numerator": 2,
+        "denominator": 1
+      },
+      "durationErrorSeconds": {
+        "numerator": 0,
+        "denominator": 1
+      },
+      "boundaries": [
+        {
+          "sourceFrame": 0,
+          "targetFrame": 0,
+          "errorSeconds": {
+            "numerator": 0,
+            "denominator": 1
+          }
+        },
+        {
+          "sourceFrame": 3,
+          "targetFrame": 6,
+          "errorSeconds": {
+            "numerator": 0,
+            "denominator": 1
+          }
+        },
+        {
+          "sourceFrame": 6,
+          "targetFrame": 12,
+          "errorSeconds": {
+            "numerator": 0,
+            "denominator": 1
+          }
+        },
+        {
+          "sourceFrame": 9,
+          "targetFrame": 18,
+          "errorSeconds": {
+            "numerator": 0,
+            "denominator": 1
+          }
+        },
+        {
+          "sourceFrame": 12,
+          "targetFrame": 24,
+          "errorSeconds": {
+            "numerator": 0,
+            "denominator": 1
+          }
+        },
+        {
+          "sourceFrame": 15,
+          "targetFrame": 30,
+          "errorSeconds": {
+            "numerator": 0,
+            "denominator": 1
+          }
+        },
+        {
+          "sourceFrame": 24,
+          "targetFrame": 48,
+          "errorSeconds": {
+            "numerator": 0,
+            "denominator": 1
+          }
+        }
+      ]
+    },
+    "rounded30": {
+      "source": "roundedSource",
+      "target": "rounded",
+      "mode": "rounded",
+      "sourceDurationSeconds": {
+        "numerator": 1,
+        "denominator": 4
+      },
+      "targetDurationSeconds": {
+        "numerator": 4,
+        "denominator": 15
+      },
+      "durationErrorSeconds": {
+        "numerator": 1,
+        "denominator": 60
+      },
+      "boundaries": [
+        {
+          "sourceFrame": 0,
+          "targetFrame": 0,
+          "errorSeconds": {
+            "numerator": 0,
+            "denominator": 1
+          }
+        },
+        {
+          "sourceFrame": 1,
+          "targetFrame": 1,
+          "errorSeconds": {
+            "numerator": -1,
+            "denominator": 120
+          }
+        },
+        {
+          "sourceFrame": 2,
+          "targetFrame": 3,
+          "errorSeconds": {
+            "numerator": 1,
+            "denominator": 60
+          }
+        },
+        {
+          "sourceFrame": 4,
+          "targetFrame": 5,
+          "errorSeconds": {
+            "numerator": 0,
+            "denominator": 1
+          }
+        },
+        {
+          "sourceFrame": 5,
+          "targetFrame": 6,
+          "errorSeconds": {
+            "numerator": -1,
+            "denominator": 120
+          }
+        },
+        {
+          "sourceFrame": 6,
+          "targetFrame": 8,
+          "errorSeconds": {
+            "numerator": 1,
+            "denominator": 60
+          }
+        }
+      ]
+    }
   }
 }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync,readdirSync} from 'node:fs';
 import {createHash} from 'node:crypto';
-import {loadProject,retimeProject,serializeProject,exportEntries,mapBoundary,parseCSV,safeBasename,validateImageDecoding,estimateCSVBytes} from '../src/core.mjs';
+import {loadProject,retimeProject,serializeProject,exportEntries,mapBoundary,parseCSV,safeBasename,validateImageDecoding,estimateCSVBytes,LIMITS} from '../src/core.mjs';
 const fixture=()=>[{name:'source.csv',data:new Uint8Array(readFileSync('fixtures/source.csv'))},...readdirSync('fixtures/source.frames').map(n=>({name:`source.frames/${n}`,data:new Uint8Array(readFileSync(`fixtures/source.frames/${n}`))}))];
 const source=()=>loadProject(fixture());
 const mutateCSV=fn=>{const e=fixture();e[0].data=new TextEncoder().encode(fn(new TextDecoder().decode(e[0].data)));return e;};
@@ -43,3 +43,6 @@ test('export snapshots all reviewed state and image bytes before asynchronous de
 
 test('projected CSV size is exact, including Unicode header text',()=>{const p=retimeProject(source(),24);p.name='日本語の作品';p.layers[0].name='Layer, "quoted"';assert.equal(estimateCSVBytes(p),new TextEncoder().encode(serializeProject(p)).length);});
 test('long-reference upsampling is rejected before oversized CSV expansion',async()=>{const p=source(),imageA='A'.repeat(116)+'.png',imageB='B'.repeat(116)+'.png';p.images=new Map([[imageA,p.images.get('A.png')],[imageB,p.images.get('X.png')]]);p.frameCount=10000;p.layers[0].exposures=[{start:0,end:10000,image:imageA}];p.layers[1].exposures=[{start:0,end:10000,image:imageB}];const input=serializeProject(p);assert(new TextEncoder().encode(input).length<16*1024*1024);const q=retimeProject(p,120);assert.equal(q.frameCount,100000);assert(estimateCSVBytes(q)>16*1024*1024);await assert.rejects(()=>exportEntries(q,'too-large'),e=>e.code==='CSV_SIZE');assert.throws(()=>serializeProject(q),e=>e.code==='CSV_SIZE');});
+
+test('total exposure complexity is bounded before building a huge receipt',()=>{const entries=fixture();let lines=new TextDecoder().decode(entries[0].data).trimEnd().split(/\r?\n/);lines[2]=lines[2].replace('24, 2, 12.000000','10001, 2, 12.000000');const frames=Array.from({length:10001},(_,i)=>`#${String(i).padStart(5,'0')}, "${['A.png','B.png','C.png'][i%3]}", "${['X.png','Y.png'][i%2]}"`);entries[0].data=new TextEncoder().encode(lines.slice(0,7).concat(frames).join('\r\n')+'\r\n');rejects(()=>loadProject(entries),'EXPOSURE_LIMIT');});
+test('receipt is included in the output file-count limit',async()=>{const p=retimeProject(source(),24),bytes=p.images.get('A.png');p.images=new Map(Array.from({length:LIMITS.files-1},(_,i)=>[`cel${i}.png`,bytes]));await assert.rejects(()=>exportEntries(p,'too-many'),e=>e.code==='FILES');});

@@ -1,61 +1,80 @@
 # ExposureGrid
 
-Source-only feasibility stage for an offline, exposure-preserving Krita TVPaint CSV timing converter. **The native consumer gate is not yet verified. No product UI has been built.**
+An offline browser tool for converting the exposure timing of Krita TVPaint CSV animations to another integer frame rate. Japanese and English, with no runtime services or dependencies.
 
-## Why this exists
+**Product candidate:** the original native feasibility gate passed in official Krita 5.3.4. The expanded browser-download and rounded-mode native matrix is pending its first hosted run. See [verification scope](docs/VERIFICATION.md).
 
-Changing animation FPS alone changes playback speed. ExposureGrid maps existing exposure boundaries onto another integer-FPS timeline while retaining the drawing references, layer order, and blank exposures. It is intended to replace manually repositioning a mixed-length exposure sheet.
+## Use
 
-Existing Krita controls can move frames or add the same number of holds to selected exposures. Multiplying unequal exposure lengths is a different operation. This is a bounded integration improvement, not a novelty or patent claim. See [research](docs/research.md).
+1. Build with `npm run build`, then open `dist/exposure-grid.html` directly in a browser. It works from a local file without a server
+2. Try the original sample, or use Krita's document **Save As → CSV** workflow
+3. ZIP the CSV and its matching `.frames` folder together at the archive root
+4. Choose a target FPS and exact or rounded timing policy
+5. Review the layers, every boundary's rational timing error, and total duration
+6. Download the new ZIP, extract it, and open the renamed CSV in Krita
 
-## Current supported profile
+Keep your original `.kra`. This tool cannot recover features already lost during CSV export. It is not a complete Krita project converter or a verified TVPaint importer.
 
-- A root `name.csv` in Krita's exported TVPaint CSV 1.0 form and matching `name.frames/` PNGs
-- Integer-valued FPS from 1 to 120, including decimal serialization such as `12.000000`
+## What changes, and what stays intact
+
+Changing FPS alone changes playback speed. ExposureGrid instead maps each exposure boundary to the target frame grid, including the clip's exclusive ending. Drawing references, blank exposures, and the layer stack remain in their existing order. PNG bytes are validated and copied without re-encoding.
+
+- **Exact:** succeeds only if every exposure boundary and the clip ending align exactly
+- **Rounded:** nearest target frame, with halfway cases rounded forward; the UI shows signed rational timing errors and requires acknowledgment when any boundary moves in time
+- **Collapsed exposure:** blocks the whole conversion. No drawing or blank is silently removed or merged
+- **Receipt:** the ZIP includes a complete JSON record of source/target boundaries and durations. Reimporting a tool-generated ZIP validates that receipt against the CSV before using it
+
+For example, 24 FPS with six source frames can become eight frames at 30 FPS: 1/4 second becomes 4/15 second, a +1/60-second change. Rounded conversion does not promise exact timing preservation.
+
+## Supported input
+
+- One root `name.csv` in Krita's TVPaint CSV 1.0 form, with matching `name.frames/` PNG files
+- Integer-valued FPS 1–120, including serialization such as `12.000000`
 - Zero-based contiguous rows, square pixels, progressive frames
-- Distinct, visible, full-opacity, normal-blend ordinary layers, each containing at least one nonblank exposure
-- Non-interlaced, canvas-sized, 8-bit RGB/RGBA PNG images
-- Explicit blank exposures and repeated-image holds
+- Distinct, visible, full-opacity, normal-blend ordinary paint layers, each with at least one nonblank exposure
+- Non-interlaced, canvas-sized, 8-bit RGB/RGBA PNGs
+- Safe ASCII file/directory names; UTF-8 project and layer names
+- Conventional stored or deflated single-volume ZIPs, including ordinary directory records and data descriptors
 
-Unsupported metadata, folder overrides, missing or unreferenced assets, duplicate/case-ambiguous paths, unsafe names, and inconsistent counts are rejected. Loading performs structural PNG preflight; every export additionally validates the zlib stream, exact decoded scanline length, and row filters, with 64 MiB per-image and 256 MiB aggregate decoded limits. PNG bytes remain unchanged. Before expansion or download, exports enforce a 16 MiB CSV cap, a 32 MiB review-receipt cap, and a 128 MiB total package cap. CSV cannot convey the complete Krita project. Groups, masks, transform/opacity animation, audio, color-management variants, and arbitrary project metadata are outside this profile. Exporting a `.kra` with unsupported features can already lose those features before this tool sees the CSV; this tool cannot detect everything discarded upstream.
+Folder overrides, missing or unreferenced assets, inconsistent metadata, entirely blank layers, duplicate/case-ambiguous paths, ZIP links, encryption, ZIP64, unsafe names, and unsupported archive extensions are rejected. Groups, masks, transform/opacity animation, audio, and arbitrary `.kra` metadata are outside the profile. Do not add unrelated files or operating-system metadata folders to the ZIP.
 
-This initial implementation exposes a core module and tests. ZIP ingestion and the browser product are intentionally deferred until official native verification succeeds.
+## Limits and privacy
 
-## Timing policy
+- 100,000 frames, 64 layers, 20,000 total exposures
+- 16 MiB CSV, 32 MiB individual file/receipt, 128 MiB total package, 136 MiB compressed ZIP ceiling
+- PNG decode limit: 64 MiB per image and 256 MiB across the package
+- ZIP entries: 4,096, including directory entries and the output receipt; adversarial alternate-directory metadata is bounded to 32,768 header checks
+- Timeline bars show at most the first 100 exposures per layer, with an explicitly labeled remainder. Every boundary remains accessible through pagination and in the complete receipt
 
-Each source exposure boundary `k`, including the exclusive clip end, maps by integer half-up rounding:
+Files stay in memory in the current tab. There are no uploads, accounts, telemetry, or network dependencies. Only the selected language is saved locally. The built HTML's content policy blocks network connections.
 
-`floor((2 * k * targetFPS + sourceFPS) / (2 * sourceFPS))`
+Exports snapshot the reviewed settings, receipt, and image bytes before asynchronous validation. Changing the source, timing, name, or acknowledgment invalidates a pending download. File-chooser cancellation leaves existing reviewed work intact.
 
-- Exact mode requires every boundary and the ending to land exactly on target frames
-- Rounded mode reports signed rational timing error for each boundary and for total duration
-- A collapsed exposure blocks conversion. No drawing or blank is silently dropped or merged
-- Output CSV and its matching `.frames` directory receive the same new basename
-- Image bytes are copied unchanged; a JSON review receipt records timing changes
+## Development and verification
 
-## Verify locally without Krita
-
-Requires Node.js 22+ and Python 3. No npm packages are needed at this stage.
+Requires Node.js 22+ and Python 3. The core and build have no package dependencies. Playwright is a pinned test-only dependency.
 
 ```sh
+npm ci --ignore-scripts
 npm test
 python3 -m unittest discover -s tests -p '*_test.py' -v
+npm run build
 npm run prepare:gate
+python3 scripts/native-gate.py --verify-inputs-only
 ```
 
-## Official native gate
+`npm run dev` serves the app on localhost:4173. The hosted browser workflow uses sandboxed Chrome on Ubuntu 22.04; it does not disable the browser sandbox. It checks Japanese/English desktop/mobile layouts, keyboard access, actual downloads, malformed input, receipt mismatch, cancellation, pagination, and stale asynchronous operations.
 
-The hosted workflow downloads the pinned, hash-verified official stable Krita 5.3.4 AppImage from a KDE-listed non-university mirror into temporary test storage. It does not build Krita from source, include the binary in this project, or use an extension/plugin. The external harness invokes only the application's CLI:
+The actual browser-downloaded exact and rounded ZIPs are independently extracted by Python's standard-library ZIP reader. Those exact CSV/PNG/receipt bytes feed the official native consumer, without substituting regenerated outputs.
 
-1. Open the original 12 FPS / 24-frame CSV and the 24 FPS / 48-frame converted CSV, exporting each to a native KRA
-2. Inspect native KRA XML for FPS, inclusive clip range, the two-layer stack, opacity/blend/visibility, and the exact raster keyframe positions
-3. Reopen each native KRA and run Krita's `--export-sequence`
-4. Compare all 256 RGBA pixels on every source frame and all 48 target frames against a hand-authored oracle
-5. Verify the shifted control's exact native keys and intended pixels, then require the unchanged original oracle to reject only frame 12
-6. Check SHA-256 identity of all five original and exported PNG files
+### Official native gate
 
-Each invocation uses a fresh native-output directory, so a no-op CLI cannot pass by reusing stale results. The oracle is handwritten in `fixtures/oracle.json` and does not import converter code. Fixtures are original 16×16 artwork. CI artifacts include native KRA files, exported PNG sequences, XML metadata, logs, and the machine-readable gate result. Opening successfully is not sufficient for a PASS.
+The workflow downloads a pinned, SHA-256-verified stable Krita 5.3.4 AppImage from a KDE-listed non-university mirror into temporary hosted storage. No local GUI installation, Krita source build, or plugin is required. Vendor binaries never enter the source or app artifacts.
 
-## Rights and dependencies
+The external CLI harness imports CSV into native KRA files, checks native FPS/range/layers/keyframes, reopens the KRA, and renders every frame. A hand-authored independent oracle checks every RGBA pixel. Exact, rounded, original-source, and deliberately shifted cases are included. The shifted control must both match its intended altered pixels and fail the original timing expectation. Fresh input/output directories prevent stale results from satisfying the gate.
 
-No project-wide open-source license has been selected for original code or artwork. No Krita source or binary is bundled. Krita's own licenses and vendor notices remain with its official distribution. The external test harness does not import Krita's extension API. See [third-party notices](THIRD_PARTY_NOTICES.md).
+## Evidence, alternatives, and rights
+
+The opportunity is a small integration improvement over manually repositioning unequal exposures or adding a constant number of holds. It is not a novelty or patent claim. See [research](docs/research.md).
+
+No project-wide open-source license has been selected for original code or artwork. All fixture artwork is original. No Krita source, binary, or extension is bundled. See [third-party notices](THIRD_PARTY_NOTICES.md).

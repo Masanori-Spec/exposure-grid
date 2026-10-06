@@ -1,1 +1,22 @@
-{"name":"exposure-grid","version":"0.0.1","private":true,"type":"module","description":"Feasibility gate for an offline Krita TVPaint CSV animation timing converter","license":"UNLICENSED","engines":{"node":">=22"},"scripts":{"test":"node --test tests/*.test.mjs","prepare:gate":"node scripts/prepare-native.mjs","check":"npm test && npm run prepare:gate"}}
+{
+  "name": "exposure-grid",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Offline Krita CSV exposure-preserving FPS conversion with timing receipts",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "prepare:gate": "node scripts/prepare-native.mjs",
+    "check": "npm test && npm run build",
+    "build": "node scripts/generate-samples.mjs && node scripts/build.mjs",
+    "dev": "node scripts/serve.mjs",
+    "test:browser": "node tests/browser/run.mjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.0"
+  }
+}

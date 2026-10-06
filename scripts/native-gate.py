@@ -3,7 +3,8 @@
 Compares official exported KRA metadata and rendered PNGs with a handwritten oracle.
 """
 from pathlib import Path
-import hashlib, json, os, re, struct, subprocess, sys, tempfile, traceback, zipfile, zlib
+import csv, hashlib, io, json, os, re, struct, subprocess, sys, tempfile, traceback, zipfile, zlib
+from fractions import Fraction
 import xml.etree.ElementTree as ET
 ROOT=Path(__file__).resolve().parents[1]
 ART=ROOT/'artifacts'/'native'
@@ -117,36 +118,172 @@ def fresh_outputs(artifact_directory):
 def require_created(path):
     assert path.is_file(), f'No native output was written at fresh path: {path.name}'
 
+# These checks deliberately use only the handwritten oracle, Python's rational
+# arithmetic, and the actual files. No converter module or timing helper is used.
+CASE_SPECS={'source':'source','retimed24':'doubled','shifted':'shifted','rounded-source':'roundedSource','rounded30':'rounded'}
+IMAGE_NAMES=['A.png','B.png','C.png','X.png','Y.png']
+
+def read_regular(path,limit=32*1024*1024):
+    assert not path.is_symlink() and path.is_file(), f'Not a regular input file: {path}'
+    assert path.stat().st_size<=limit, f'Oversized input file: {path}'
+    return path.read_bytes()
+
+def rational(value,label):
+    assert isinstance(value,dict) and set(value)=={'numerator','denominator'}, (label,value)
+    n,d=value['numerator'],value['denominator']
+    assert type(n) is int and type(d) is int and d>0, (label,value)
+    fraction=Fraction(n,d)
+    assert (fraction.numerator,fraction.denominator)==(n,d), f'{label}: rational must be reduced with positive denominator'
+    return fraction
+
+def inspect_receipt(path,name):
+    receipt=json.loads(read_regular(path).decode('utf-8'))
+    expected=ORACLE['reviews'][name]; source=ORACLE[expected['source']]; target=ORACLE[expected['target']]
+    assert receipt['schema']=='exposure-grid-review/v1'
+    for key,value in {'mode':expected['mode'],'sourceFPS':source['fps'],'targetFPS':target['fps'],'sourceFrames':source['frames'],'targetFrames':target['frames']}.items():
+        assert receipt[key]==value and type(receipt[key]) is type(value), (name,key,receipt[key],value)
+    durations={'sourceDurationSeconds':Fraction(source['frames'],source['fps']),'targetDurationSeconds':Fraction(target['frames'],target['fps']),'durationErrorSeconds':Fraction(target['frames'],target['fps'])-Fraction(source['frames'],source['fps'])}
+    for key,value in durations.items():
+        assert receipt[key]==expected[key], (name,key,receipt[key],expected[key])
+        assert rational(receipt[key],key)==value, (name,key,value)
+    assert receipt['boundaries']==expected['boundaries'], (name,'literal boundaries',receipt['boundaries'])
+    expected_source_keys=sorted({0,source['frames'],*(start for layer in source['layers'] for start,_,_ in layer['spans'])})
+    assert [b['sourceFrame'] for b in receipt['boundaries']]==expected_source_keys
+    for boundary in receipt['boundaries']:
+        before,after=boundary['sourceFrame'],boundary['targetFrame']
+        assert type(before) is int and type(after) is int
+        assert rational(boundary['errorSeconds'],'boundary error')==Fraction(after,target['fps'])-Fraction(before,source['fps'])
+    assert len(receipt['layers'])==len(target['layers'])
+    for actual,old,new in zip(receipt['layers'],source['layers'],target['layers']):
+        assert actual['name']==new['name']==old['name']
+        assert len(old['spans'])==len(new['spans'])==len(actual['exposures'])
+        for exposure,(source_start,source_end,source_symbol),(start,end,symbol) in zip(actual['exposures'],old['spans'],new['spans']):
+            assert symbol==source_symbol, 'Drawing or blank changed in handwritten receipt'
+            assert exposure=={'start':start,'end':end,'image':'' if symbol=='blank' else symbol+'.png','sourceStart':source_start,'sourceEnd':source_end}, (name,exposure)
+            assert all(type(exposure[key]) is int for key in ['start','end','sourceStart','sourceEnd'])
+    return {'passed':True,'mode':receipt['mode'],'boundaryCount':len(receipt['boundaries']),'sourceDurationSeconds':receipt['sourceDurationSeconds'],'targetDurationSeconds':receipt['targetDurationSeconds'],'durationErrorSeconds':receipt['durationErrorSeconds'],'receiptSHA256':hashlib.sha256(path.read_bytes()).hexdigest()}
+
+def inspect_csv(path,spec):
+    rows=list(csv.reader(io.StringIO(read_regular(path).decode('utf-8-sig')),skipinitialspace=True,strict=True))
+    assert rows[0]==['UTF-8','TVPaint','CSV 1.0']
+    assert rows[1]==['Project Name','Width','Height','Frame Count','Layer Count','Frame Rate','Pixel Aspect Ratio','Field Mode']
+    assert len(rows[2])==8 and rows[2][0]
+    settings=rows[2]
+    assert [int(settings[i]) for i in range(1,5)]==[16,16,spec['frames'],len(spec['layers'])]
+    assert Fraction(settings[5])==spec['fps'] and Fraction(settings[6])==1 and settings[7]=='Progressive'
+    assert rows[3]==['#Layers',*[layer['name'] for layer in spec['layers']]]
+    assert rows[4][0]=='#Density' and len(rows[4])==len(spec['layers'])+1 and all(Fraction(value)==1 for value in rows[4][1:])
+    assert rows[5]==['#Blending',*['Color' for _ in spec['layers']]]
+    assert rows[6]==['#Visible',*['1' for _ in spec['layers']]]
+    assert len(rows)==7+spec['frames']
+    for frame,row in enumerate(rows[7:]):
+        assert re.fullmatch(r'#\d+',row[0]) and int(row[0][1:])==frame
+        symbols=[next(symbol for start,end,symbol in layer['spans'] if start<=frame<end) for layer in spec['layers']]
+        assert row[1:]==['' if symbol=='blank' else symbol+'.png' for symbol in symbols], (path.name,frame,row)
+    return {'passed':True,'fps':spec['fps'],'frames':spec['frames'],'layerOrder':[layer['name'] for layer in spec['layers']]}
+
+def expected_files(name):
+    return {name+'.csv',*[name+'.frames/'+image for image in IMAGE_NAMES],*([name+'.review.json'] if name in ORACLE['reviews'] else [])}
+
+def verify_prepared_inputs(artifact_directory,browser_directory=None):
+    manifest=json.loads(read_regular(artifact_directory/'prepared.json',1024*1024).decode('utf-8'))
+    assert manifest['schema']=='exposure-grid-native-input/v2'
+    assert re.fullmatch(r'native-input-[A-Za-z0-9_-]+',manifest['inputDirectory']), 'Unsafe native input directory'
+    inputs=artifact_directory/manifest['inputDirectory']
+    assert not inputs.is_symlink() and inputs.is_dir() and inputs.resolve().parent==artifact_directory.resolve()
+    assert set(manifest['packages'])==set(CASE_SPECS), 'Prepared case set differs from gate cases'
+    assert manifest['inputSource'] in ['browser-downloads','generated-core']
+    if manifest['inputSource']=='browser-downloads':
+        assert browser_directory is not None, 'Browser inputs require EXPOSURE_BROWSER_EXPORT_DIR for independent source-byte recheck'
+    if browser_directory is not None:
+        assert manifest['inputSource']=='browser-downloads', 'Browser gate cannot use generated output packages'
+        browser_directory=Path(browser_directory)
+        assert not browser_directory.is_symlink() and browser_directory.is_dir()
+        assert not browser_directory.resolve().is_relative_to(artifact_directory.resolve()), 'Browser handoff must be outside native artifacts'
+        roots={name+extension for name in ORACLE['reviews'] for extension in ['.csv','.frames','.review.json']}
+        assert {p.name for p in browser_directory.iterdir()}==roots, 'Unexpected browser handoff entries'
+    roots={name+'.csv' for name in CASE_SPECS}|{name+'.frames' for name in CASE_SPECS}|{name+'.review.json' for name in ORACLE['reviews']}
+    assert {p.name for p in inputs.iterdir()}==roots, 'Unexpected prepared input entries'
+    fixed_hashes=json.loads((ROOT/'fixtures/png-sha256.json').read_text())
+    assert set(fixed_hashes)==set(IMAGE_NAMES)
+    result={'passed':True,'inputSource':manifest['inputSource'],'browserOriginalsRechecked':browser_directory is not None,'packages':{},'reviews':{}}
+    for name,key in CASE_SPECS.items():
+        package=manifest['packages'][name]
+        provenance=('browser-download' if browser_directory is not None else 'generated-core') if name in ORACLE['reviews'] else 'controlled-negative' if name=='shifted' else 'controlled-fixture'
+        assert package['provenance']==provenance, (name,'Unexpected provenance')
+        assert set(package['files'])==expected_files(name), (name,'Unexpected manifest file set')
+        frames=inputs/(name+'.frames')
+        assert not frames.is_symlink() and frames.is_dir()
+        assert {p.name for p in frames.iterdir()}==set(IMAGE_NAMES)
+        if browser_directory is not None and name in ORACLE['reviews']:
+            browser_frames=browser_directory/(name+'.frames')
+            assert not browser_frames.is_symlink() and browser_frames.is_dir()
+            assert {p.name for p in browser_frames.iterdir()}==set(IMAGE_NAMES)
+        hashes={}
+        for filename in sorted(expected_files(name)):
+            data=read_regular(inputs/filename)
+            actual={'sha256':hashlib.sha256(data).hexdigest(),'bytes':len(data)}
+            assert actual==package['files'][filename], (name,filename,'Prepared-byte hash mismatch')
+            if browser_directory is not None and name in ORACLE['reviews']:
+                assert read_regular(browser_directory/filename)==data, (name,filename,'Browser download bytes changed')
+            hashes[filename]=actual
+        for image in IMAGE_NAMES:
+            assert hashlib.sha256(read_regular(ROOT/'fixtures/source.frames'/image)).hexdigest()==fixed_hashes[image]
+            assert hashes[name+'.frames/'+image]['sha256']==fixed_hashes[image], (name,image,'Original PNG bytes changed')
+        if name in ['source','rounded-source']:
+            assert read_regular(inputs/(name+'.csv'))==read_regular(ROOT/'fixtures'/(name+'.csv')), 'Controlled source fixture changed'
+        result['packages'][name]={'provenance':provenance,'csv':inspect_csv(inputs/(name+'.csv'),ORACLE[key]),'files':hashes,'pngCount':len(IMAGE_NAMES)}
+        if name in ORACLE['reviews']:result['reviews'][name]=inspect_receipt(inputs/(name+'.review.json'),name)
+    return inputs,result
+
 def main():
-    executable=os.environ['KRITA_BIN']; report={'passed':False,'consumer':'Official Krita CLI','cases':{}}
+    report={'passed':False,'consumer':'Official Krita CLI','cases':{}}
+    ART.mkdir(parents=True,exist_ok=True)
     try:
+        browser=os.environ.get('EXPOSURE_BROWSER_EXPORT_DIR')
+        if 'EXPOSURE_BROWSER_EXPORT_DIR' in os.environ:assert browser and browser.strip(), 'EXPOSURE_BROWSER_EXPORT_DIR cannot be empty'
+        inputs,prepared=verify_prepared_inputs(ART,browser)
+        report['preparedInputs']=prepared
+        if sys.argv[1:]==['--verify-inputs-only']:
+            print(json.dumps(prepared,indent=2))
+            return
+        assert not sys.argv[1:], 'Supported option: --verify-inputs-only'
+        executable=os.environ['KRITA_BIN']
         outputs=fresh_outputs(ART)
         report['outputDirectory']=outputs.relative_to(ART).as_posix()
         version=subprocess.run([executable,'--version'],text=True,capture_output=True,timeout=30)
         report['version']=(version.stdout+version.stderr).strip()
         assert version.returncode==0, f'Krita version query failed: {version.returncode}'
         assert re.search(r'\b5\.3\.4\b',report['version']), report['version']
-        for name,key in [('source','source'),('retimed24','doubled'),('shifted','doubled')]:
-            spec=ORACLE[key]; csv=ART/(name+'.csv'); kra=outputs/(name+'.kra'); sequence=outputs/(name+'-sequence');sequence.mkdir()
-            command(executable,['--export','--export-filename',str(kra),str(csv)],outputs/(name+'-import.log'))
+        for name,key in CASE_SPECS.items():
+            spec=ORACLE[key]; source_csv=inputs/(name+'.csv'); kra=outputs/(name+'.kra'); sequence=outputs/(name+'-sequence');sequence.mkdir()
+            command(executable,['--export','--export-filename',str(kra),str(source_csv)],outputs/(name+'-import.log'))
             require_created(kra)
-            metadata=inspect_kra(kra,ORACLE['shifted'] if name=='shifted' else spec)
+            metadata=inspect_kra(kra,spec)
             # Reopen the saved native KRA, rather than rendering the CSV directly.
             command(executable,['--export-sequence','--export-filename',str(sequence/'frame.png'),str(kra)],outputs/(name+'-render.log'))
-            pixels=check_sequence(sequence,spec); report['cases'][name]={'metadata':metadata,'pixels':pixels}
+            pixels=check_sequence(sequence,ORACLE['doubled'] if name=='shifted' else spec)
+            report['cases'][name]={'metadata':metadata,'pixels':pixels}
             if name=='shifted':
                 assert [m['frame'] for m in pixels['mismatches']]==ORACLE['negativeControl']['expectedMismatchFrames'], 'Negative control did not fail exactly at shifted frame 12'
                 intended=check_sequence(sequence,ORACLE['shifted'])
                 report['cases'][name]['intendedShiftedPixels']=intended
                 assert not intended['mismatches'], 'Negative control differs from its exact intended shifted pixel planes'
             else: assert not pixels['mismatches'], f'{name}: native projected pixels differ from handwritten oracle'
-        preserve=json.loads((ART/'png-preservation.json').read_text()); assert preserve['passed'] and len(preserve['images'])==5
-        for record in preserve['images'].values():assert record['source']==record['output']
-        report['pngPreservation']=preserve; report['passed']=True
+        # Re-read all inputs after the consumer runs; hashes are evidence of actual
+        # files, rather than trusting the preparation script's preservation claim.
+        _,rechecked=verify_prepared_inputs(ART,browser)
+        assert rechecked==prepared, 'Native inputs changed during rendering'
+        report['pngPreservation']={'passed':True,'imagesPerCase':5,'caseCount':len(CASE_SPECS)}
+        report['passed']=True
     except Exception:
         report['error']=traceback.format_exc(); raise
     finally:
-        (ART/'native-gate-result.json').write_text(json.dumps(report,indent=2)+'\n')
-    print('PASS: official Krita 5.3.4 imported source/output, preserved keyframes/layer order/clip FPS, rendered 24+48 full pixel planes, and rejected the shifted-exposure control')
+        destination='prepared-input-check.json' if sys.argv[1:]==['--verify-inputs-only'] else 'native-gate-result.json'
+        if destination=='prepared-input-check.json':
+            report['inputVerificationPassed']='preparedInputs' in report and 'error' not in report
+            report['nativeConsumerRun']=False
+        (ART/destination).write_text(json.dumps(report,indent=2)+'\n')
+    print('PASS: official Krita 5.3.4 verified source 24 + exact 48 + rounded source 6 + rounded target 8 full pixel planes, native FPS/range/layer order/keys, independent rational receipts, original PNG bytes, and shifted negative control')
 
 if __name__=='__main__':main()

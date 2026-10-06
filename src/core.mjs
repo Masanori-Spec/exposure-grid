@@ -1,7 +1,7 @@
 /** Original ExposureGrid source. No project-wide open-source license selected. */
 export class ProfileError extends Error { constructor(code, message) { super(message); this.name = 'ProfileError'; this.code = code; } }
 const fail = (code, message) => { throw new ProfileError(code, message); };
-export const LIMITS = Object.freeze({frames: 100000, layers: 64, dimension: 16384, csvBytes: 16*1024*1024, files: 4096, fileBytes: 32*1024*1024, totalBytes: 128*1024*1024, decodedImageBytes: 64*1024*1024, totalDecodedBytes: 256*1024*1024});
+export const LIMITS = Object.freeze({frames: 100000, exposures: 20000, layers: 64, dimension: 16384, csvBytes: 16*1024*1024, files: 4096, fileBytes: 32*1024*1024, totalBytes: 128*1024*1024, decodedImageBytes: 64*1024*1024, totalDecodedBytes: 256*1024*1024});
 const HEADERS = ['Project Name','Width','Height','Frame Count','Layer Count','Frame Rate','Pixel Aspect Ratio','Field Mode'];
 export const safeBasename = name => typeof name === 'string' && /^[A-Za-z0-9][A-Za-z0-9 _.-]{0,119}$/.test(name) && !name.includes('..') && !/[. ]$/.test(name) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(name);
 export function parseCSV(text) {
@@ -106,12 +106,12 @@ export function loadProject(entries) {
   if(rows[4].slice(1).some(x=>!/^1(?:\.0+)?$/.test(x))||rows[5].slice(1).some(x=>x!=='Color')||rows[6].slice(1).some(x=>x!=='1')) fail('LAYER_PROFILE','Only visible, fully opaque, normal-blend layers are supported');
   const frames=rows.slice(7);
   if(frames.length!==project.frameCount) fail('FRAME_COUNT','Declared frame count does not match exposure rows');
-  const used=new Set();
+  const used=new Set(); let exposureCount=0;
   for(let f=0;f<frames.length;f++) {
     const row=frames[f]; if(!/^#\d+$/.test(row[0])||Number(row[0].slice(1))!==f||row.length!==project.layerCount+1) fail('FRAME_ROWS','Frame rows must start at zero, be contiguous, and match layer count');
     for(let l=0;l<project.layerCount;l++) { const image=row[l+1]; if(image&&(!safeBasename(image)||!image.endsWith('.png'))) fail('IMAGE_REF','PNG references must be exact safe basenames');
       if(image) { const path=`${base}.frames/${image}`; if(!files.has(path)) fail('MISSING_IMAGE',`Missing exact image: ${image}`); used.add(path); }
-      const exposures=project.layers[l].exposures; if(!exposures.length||exposures.at(-1).image!==image) exposures.push({start:f,end:f+1,image}); else exposures.at(-1).end=f+1;
+      const exposures=project.layers[l].exposures; if(!exposures.length||exposures.at(-1).image!==image) {if(++exposureCount>LIMITS.exposures)fail('EXPOSURE_LIMIT','The project exceeds 20,000 total exposures');exposures.push({start:f,end:f+1,image});} else exposures.at(-1).end=f+1;
     }
   }
   if(project.layers.some(l=>l.exposures.every(x=>!x.image))) fail('EMPTY_LAYER','Entirely blank layers are unsupported because Krita drops them');
@@ -168,6 +168,7 @@ export async function exportEntries(project,base) {
   if(!safeBasename(base)||![`${base}.csv`,`${base}.frames`,`${base}.review.json`].every(safeBasename)) fail('PATH','Choose a safe output basename of at most 108 characters');
   // Capture review state and every byte synchronously before asynchronous decoding.
   const snapshot=structuredClone(project);
+  if(snapshot.images.size+2>LIMITS.files)fail('FILES','The output file count, including the receipt, exceeds the supported limit');
   const csvSize=estimateCSVBytes(snapshot);
   if(csvSize>LIMITS.csvBytes)fail('CSV_SIZE','The converted CSV would exceed the 16 MiB limit');
   const receipt=boundedJSON(snapshot.receipt,LIMITS.fileBytes);

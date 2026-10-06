@@ -1,0 +1,13 @@
+UTF-8, TVPaint, "CSV 1.0"
+Project Name, Width, Height, Frame Count, Layer Count, Frame Rate, Pixel Aspect Ratio, Field Mode
+"Original rounded timing study", 16, 16, 6, 2, 24.000000, 1.000000, Progressive
+#Layers, "Layer A", "Layer B"
+#Density, 1.000000, 1.000000
+#Blending, "Color", "Color"
+#Visible, 1, 1
+#00000, "A.png", ""
+#00001, "A.png", "X.png"
+#00002, "B.png", "X.png"
+#00003, "B.png", "X.png"
+#00004, "B.png", "Y.png"
+#00005, "C.png", "Y.png"
