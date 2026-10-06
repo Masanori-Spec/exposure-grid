@@ -2,7 +2,7 @@
 
 An offline browser tool for converting the exposure timing of Krita TVPaint CSV animations to another integer frame rate. Japanese and English, with no runtime services or dependencies.
 
-**Product candidate:** official Krita 5.3.4 verified the actual browser-downloaded exact and rounded outputs in the first product run. That run exposed a Node 22 raw-deflate rejection gap, and review found cramped 320px controls. Portable framing, responsive fixes, and print checks are undergoing a new hosted verification. See [verification scope](docs/VERIFICATION.md).
+**Verified release:** [both hosted jobs passed](https://github.com/Masanori-Spec/exposure-grid/actions/runs/37415185525) for the application at `c7e2d66133302f4d1d147c581100cce00b3f17b3`: 116 Node 22 tests, 18 Python checks, 28 sandboxed browser scenarios, actual exact/rounded ZIP downloads reopened in official Krita 5.3.4, and independently reviewed responsive/print evidence. See [verification scope](docs/VERIFICATION.md) for the tested profile and limits.
 
 ## Use
 
@@ -80,3 +80,9 @@ The external CLI harness imports CSV into native KRA files, checks native FPS/ra
 The opportunity is a small integration improvement over manually repositioning unequal exposures or adding a constant number of holds. It is not a novelty or patent claim. See [research](docs/research.md).
 
 No project-wide open-source license has been selected for original code or artwork. All fixture artwork is original. No Krita source, binary, or extension is bundled. See [third-party notices](THIRD_PARTY_NOTICES.md).
+
+## Preview
+
+Japanese rounded-timing review, captured from the verified offline app. English is also available.
+
+![ExposureGrid desktop showing rounded timing, layer exposures, and per-boundary rational errors](docs/preview-desktop-ja.png)
