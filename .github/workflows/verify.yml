@@ -51,3 +51,65 @@ jobs:
           name: exposuregrid-official-native-gate
           path: artifacts/native/
           retention-days: 14
+  browser-download-native:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci --ignore-scripts
+      - run: npm run build
+      - name: Test-only Japanese system fonts
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y fonts-noto-cjk
+          fc-cache -f
+          fc-match -f '%{family}\n' 'sans:lang=ja'
+      - name: Sandboxed Chrome, offline file, and actual downloads
+        env:
+          CHROMIUM_PATH: /usr/bin/google-chrome
+        run: |
+          test -x "$CHROMIUM_PATH"
+          mkdir -p artifacts/browser
+          node scripts/serve.mjs > artifacts/browser/server.log 2>&1 &
+          SERVER_PID=$!
+          trap 'kill "$SERVER_PID"' EXIT
+          for i in $(seq 1 40); do curl -fsS http://127.0.0.1:4173/ >/dev/null && break; sleep 0.25; done
+          node tests/browser/run.mjs
+      - name: Independent extraction of actual downloaded ZIPs
+        run: |
+          EXPORT_DIR="$(python3 scripts/extract-browser-packages.py)"
+          echo "EXPOSURE_BROWSER_EXPORT_DIR=$EXPORT_DIR" >> "$GITHUB_ENV"
+      - name: Prepare only actual browser output bytes
+        run: |
+          npm run prepare:gate
+          python3 scripts/native-gate.py --verify-inputs-only
+      - name: Fetch verified official stable consumer
+        run: python3 scripts/fetch-krita.py
+      - name: Official Krita consumes browser-downloaded exact and rounded outputs
+        env:
+          QT_OPENGL: software
+          LIBGL_ALWAYS_SOFTWARE: '1'
+        run: |
+          export XDG_CONFIG_HOME="$RUNNER_TEMP/exposuregrid-browser-config"
+          export XDG_DATA_HOME="$RUNNER_TEMP/exposuregrid-browser-data"
+          export XDG_CACHE_HOME="$RUNNER_TEMP/exposuregrid-browser-cache"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/exposuregrid-browser-runtime"
+          mkdir -p "$XDG_CONFIG_HOME" "$XDG_DATA_HOME" "$XDG_CACHE_HOME" "$XDG_RUNTIME_DIR"
+          chmod 700 "$XDG_RUNTIME_DIR"
+          export KRITA_BIN="$RUNNER_TEMP/exposuregrid-krita/squashfs-root/AppRun"
+          xvfb-run -a -s '-screen 0 1280x800x24' python3 scripts/native-gate.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: exposuregrid-browser-download-native-evidence
+          path: |
+            artifacts/browser/
+            artifacts/native/
+            dist/
+          retention-days: 14
